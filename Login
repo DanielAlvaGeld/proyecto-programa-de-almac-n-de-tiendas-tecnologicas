@@ -1,0 +1,144 @@
+import flet as ft
+from database import verificar_usuario
+from main import main as inventario_main
+
+def login_main(page: ft.Page):
+    page.title = "INVENTARIO SENCILLO"
+    page.bgcolor = ft.Colors.WHITE
+    page.window_width = 900
+    page.window_height = 600
+    page.horizontal_alignment = "center"
+    page.vertical_alignment = "center"
+
+    show_password = {"value": False}
+
+    usuario_field = ft.TextField(
+        hint_text="Usuario",
+        width=300,
+        height=48,
+        border_radius=8,
+        border=ft.InputBorder.OUTLINE,
+        prefix_icon=ft.Icons.PERSON,
+    )
+
+    contrasena_field = ft.TextField(
+        hint_text="Contraseña",
+        width=300,
+        height=48,
+        password=True,
+        can_reveal_password=False,
+        border_radius=8,
+        border=ft.InputBorder.OUTLINE,
+        prefix_icon=ft.Icons.LOCK,
+        suffix_icon=ft.Icons.VISIBILITY_OFF,
+    )
+
+    def toggle_password(e):
+        show_password["value"] = not show_password["value"]
+        contrasena_field.password = not show_password["value"]
+        contrasena_field.suffix_icon = (
+            ft.Icons.VISIBILITY_OFF if contrasena_field.password else ft.Icons.VISIBILITY
+        )
+        page.update()
+
+    contrasena_field.on_suffix_icon_click = toggle_password
+
+    def on_login_click(e):
+        usuario = usuario_field.value.strip()
+        contrasena = contrasena_field.value.strip()
+
+        if not usuario or not contrasena:
+            page.snack_bar = ft.SnackBar(
+                ft.Text("Por favor ingrese usuario y contraseña"),
+                bgcolor=ft.Colors.RED_400
+            )
+            page.snack_bar.open = True
+            page.update()
+            return
+
+        user_data = verificar_usuario(usuario, contrasena)
+        
+        if user_data:
+            page.snack_bar = ft.SnackBar(
+                ft.Text(f"¡Bienvenido {user_data.get('nombre_completo', usuario)}!"),
+                bgcolor=ft.Colors.GREEN_400
+            )
+            page.snack_bar.open = True
+            page.update()
+            
+            page.clean()
+            inventario_main(page)
+        else:
+            page.snack_bar = ft.SnackBar(
+                ft.Text("Usuario o contraseña incorrectos"),
+                bgcolor=ft.Colors.RED_400
+            )
+            page.snack_bar.open = True
+            page.update()
+
+    boton_login = ft.FilledButton(
+        text="Iniciar Sesión",
+        width=300,
+        height=45,
+        style=ft.ButtonStyle(
+            bgcolor=ft.Colors.ORANGE_400,
+            color=ft.Colors.WHITE,
+            shape=ft.RoundedRectangleBorder(radius=8),
+        ),
+        on_click=on_login_click,
+    )
+
+    card = ft.Container(
+        width=400,
+        height=350,
+        bgcolor=ft.Colors.WHITE,
+        border_radius=12,
+        border=ft.border.all(1, ft.Colors.GREY_300),
+        padding=30,
+        shadow=ft.BoxShadow(
+            spread_radius=1,
+            blur_radius=15,
+            color=ft.Colors.with_opacity(0.1, ft.Colors.BLACK),
+        ),
+        content=ft.Column(
+            [
+                ft.Icon(ft.Icons.COMPUTER, size=50, color=ft.Colors.ORANGE_600),
+                ft.Container(height=20),
+                usuario_field,
+                contrasena_field,
+                ft.Container(height=20),
+                boton_login,
+            ],
+            alignment=ft.MainAxisAlignment.CENTER,
+            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+        ),
+    )
+
+    titulo = ft.Row(
+        [
+            ft.Text("INVENTARIO ", size=34, weight=ft.FontWeight.BOLD, color=ft.Colors.BLACK),
+            ft.Text("SENCILLO", size=34, weight=ft.FontWeight.BOLD, color=ft.Colors.ORANGE_700),
+        ],
+        alignment=ft.MainAxisAlignment.CENTER,
+    )
+
+    layout = ft.Column(
+        [
+            ft.Container(height=20),
+            titulo,
+            ft.Text(
+                "Sistema de gestión de inventario y ventas",
+                size=14,
+                color=ft.Colors.GREY_600,
+                text_align=ft.TextAlign.CENTER
+            ),
+            ft.Container(height=30),
+            card,
+        ],
+        alignment=ft.MainAxisAlignment.CENTER,
+        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+    )
+
+    page.add(layout)
+
+ft.app(target=login_main, assets_dir=".")
