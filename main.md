@@ -557,6 +557,13 @@ def main(page: ft.Page):
                 categoria=categoria,
                 imagen=imagen_seleccionada["ruta"] or "/images/default.png"
             )
+            --Agregar codigo para "salida"--
+            salida = salida_producto_nuevo(
+                nombre=nombre_field.value,
+                precio=float(precio_field.value),
+                cantidad=int(stock_field.value),
+                categoria=categoria,
+            )
             
             if resultado["success"]:
                 page.snack_bar = ft.SnackBar(ft.Text("✓ Producto agregado a SQL Server"), bgcolor=ft.Colors.GREEN)
