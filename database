@@ -1,0 +1,593 @@
+import pyodbc
+from datetime import datetime
+import hashlib
+import json
+
+# --- CONFIGURACIÓN DE CONEXIÓN ---
+SERVER = 'LOCALHOST'
+DATABASE = 'InvarioDB_proy'
+USE_WINDOWS_AUTH = True
+USERNAME = 'USUARIO' 
+PASSWORD = 'USUARIO'
+
+def get_connection():
+    """Obtiene una conexión a SQL Server usando pyodbc"""
+    try:
+        if USE_WINDOWS_AUTH:
+            connection_string = (
+                f'DRIVER={{ODBC Driver 17 for SQL Server}};'
+                f'SERVER={SERVER};'
+                f'DATABASE={DATABASE};'
+                f'Trusted_Connection=yes;'
+            )
+        else:
+            connection_string = (
+                f'DRIVER={{ODBC Driver 17 for SQL Server}};'
+                f'SERVER={SERVER};'
+                f'DATABASE={DATABASE};'
+                f'UID={USERNAME};'
+                f'PWD={PASSWORD};'
+            )
+        
+        conn = pyodbc.connect(connection_string)
+        return conn
+    except Exception as e:
+        print(f"❌ Error crítico de conexión: {e}")
+        return None
+
+
+def row_to_dict(cursor, row):
+    """Convierte una fila de pyodbc a diccionario (reemplaza sqlite3.Row)"""
+    return dict(zip([column[0] for column in cursor.description], row))
+
+def rows_to_dict_list(cursor, rows):
+    """Convierte lista de filas a lista de diccionarios"""
+    columns = [column[0] for column in cursor.description]
+    return [dict(zip(columns, row)) for row in rows]
+
+def hash_password(password):
+    """Hashea una contraseña usando SHA256"""
+    return hashlib.sha256(password.encode()).hexdigest()
+
+def inicializar_db():
+    """Crea las tablas y triggers en SQL Server si no existen"""
+    conn = get_connection()
+    if not conn: return
+    cursor = conn.cursor()
+    
+    # 1. Tabla Usuarios
+    cursor.execute("""
+        IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'usuarios')
+        CREATE TABLE usuarios (
+            id INT IDENTITY(1,1) PRIMARY KEY,
+            usuario VARCHAR(50) UNIQUE NOT NULL,
+            contrasena VARCHAR(255) NOT NULL,
+            nombre_completo VARCHAR(100),
+            email VARCHAR(100),
+            celular VARCHAR(20),
+            activo BIT DEFAULT 1,
+            fecha_creacion DATETIME DEFAULT GETDATE()
+        )
+    """)
+    
+
+    try:
+        cursor.execute("""
+            IF NOT EXISTS(SELECT * FROM sys.columns WHERE Name = N'celular' AND Object_ID = Object_ID(N'usuarios'))
+            BEGIN
+                ALTER TABLE usuarios ADD celular VARCHAR(20)
+            END
+        """)
+        conn.commit()
+    except:
+        pass
+
+    # 2. Tabla Productos
+    cursor.execute("""
+        IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'productos')
+        CREATE TABLE productos (
+            id INT IDENTITY(1,1) PRIMARY KEY,
+            nombre VARCHAR(200) NOT NULL,
+            precio DECIMAL(10, 2) NOT NULL,
+            stock INT DEFAULT 0,
+            categoria VARCHAR(100),
+            imagen VARCHAR(500),
+            activo BIT DEFAULT 1
+        )
+    """)
+
+    # 3. Tabla Ventas
+    cursor.execute("""
+        IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'ventas')
+        CREATE TABLE ventas (
+            id INT IDENTITY(1,1) PRIMARY KEY,
+            numero_venta VARCHAR(50) UNIQUE NOT NULL,
+            total DECIMAL(10, 2) NOT NULL,
+            productos_json NVARCHAR(MAX),
+            metodo_pago VARCHAR(50) DEFAULT 'Efectivo',
+            fecha DATETIME DEFAULT GETDATE()
+        )
+    """)
+
+    # 4. Tabla Detalle Ventas
+    cursor.execute("""
+        IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'detalle_ventas')
+        CREATE TABLE detalle_ventas (
+            id INT IDENTITY(1,1) PRIMARY KEY,
+            venta_id INT NOT NULL,
+            producto_id INT NOT NULL,
+            cantidad INT NOT NULL,
+            precio_unitario DECIMAL(10, 2) NOT NULL,
+            subtotal DECIMAL(10, 2) NOT NULL,
+            FOREIGN KEY (venta_id) REFERENCES ventas(id),
+            FOREIGN KEY (producto_id) REFERENCES productos(id)
+        )
+    """)
+    conn.commit()
+
+
+    try:
+        cursor.execute("""
+            CREATE TRIGGER actualizar_stock_despues_venta
+            ON detalle_ventas
+            AFTER INSERT
+            AS
+            BEGIN
+                SET NOCOUNT ON;
+                UPDATE p 
+                SET p.stock = p.stock - i.cantidad 
+                FROM productos p 
+                INNER JOIN inserted i ON p.id = i.producto_id;
+            END
+        """)
+        conn.commit()
+        print("✓ Trigger creado")
+    except:
+        pass # El trigger ya existe
+
+ 
+    cursor.execute("SELECT COUNT(*) FROM usuarios WHERE usuario = 'eduardo'")
+    if cursor.fetchone()[0] == 0:
+        cursor.execute("""
+            INSERT INTO usuarios (usuario, contrasena, nombre_completo, email, celular)
+            VALUES (?, ?, ?, ?, ?)
+        """, ('eduardo', hash_password('eduardo123'), 'Eduardo Castro', 'eduardo@inventario.com', '963499142'))
+        print("✓ Usuario eduardo creado")
+
+    cursor.execute("SELECT COUNT(*) FROM productos")
+    if cursor.fetchone()[0] == 0:
+        productos = [
+            ("Laptop Gamer Hp Victus 15-fb3020la", 3399, 15, "Laptops", "/images/laptop 1.webp"),
+            ("Laptop Lenovo V15 G4 IRU", 1289, 20, "Laptops", "/images/laptop 2.webp"),
+            ("Laptop Gamer ASUS TUF Gaming A15", 3500, 12, "Laptops", "/images/laptop 3.webp"),
+            ("Laptop Gaming OMEN MAX 16-ah0005la", 3500, 8, "Laptops", "/images/laptop 4.avif"),
+            ("Laptop HP 15-FB3021LA", 3500, 10, "Laptops", "/images/laptop 5.webp"),
+            ("Memoria RAM Kingston 8GB", 180, 50, "Componentes", "/images/memoria 1.jpg"),
+            ("Memoria RAM Corsair 16GB", 320, 30, "Componentes", "/images/corsair.jpeg"),
+            ("Procesador AMD Ryzen 5 5600X", 950, 15, "Componentes", "/images/memoria 1.jpg"),
+            ("Procesador Intel Core i7-12700K", 1250, 10, "Componentes", "/image/i7.jpg"),
+            ("Placa Madre ASUS B550M", 650, 20, "Componentes", "/images/placa.webp"),
+            ("Tarjeta Gráfica RTX 4060", 1850, 8, "Componentes", "/images/grafica.jpg"),
+            ("Fuente EVGA 650W", 380, 25, "Componentes", "/images/fuente.webp"),
+            ("Teclado Mecánico Redragon Kumara", 220, 35, "Periféricos", "/images/teclado.webp"),
+            ("Mouse Logitech G203", 120, 40, "Periféricos", "/images/mouse.webp"),
+            ("Audífonos HyperX Cloud II", 450, 22, "Periféricos", "/images/audifonos 2.webp"),
+            ("Micrófono Fifine K690", 360, 18, "Periféricos", "/images/audifonos 3.webp"),
+            ("Cámara Logitech C920", 390, 15, "Periféricos", "/images/camara.webp"),
+            ("Monitor LG 24\"", 800, 25, "Monitores", "/images/monitor1.webp"),
+            ("Monitor Samsung 27\"", 1150, 18, "Monitores", "/images/monitor2.webp"),
+            ("PC Gamer Ryzen", 4200, 10, "PC", "/images/pc1.webp"),
+            ("PC Oficina", 1500, 15, "PC", "/images/pc2.webp"),
+            ("PC Gamer Intel i9", 6200, 5, "PC", "/images/pc3.webp"),
+            ("PC Mini Dell Optiplex", 2300, 12, "PC", "/images/pc4.webp"),
+            ("Impresora HP DeskJet 2700", 600, 20, "Impresoras", "/images/impresora1.webp"),
+            ("Impresora Epson EcoTank L3250", 750, 15, "Impresoras", "/images/impresora2.webp"),
+        ]
+        
+        cursor.executemany("""
+            INSERT INTO productos (nombre, precio, stock, categoria, imagen)
+            VALUES (?, ?, ?, ?, ?)
+        """, productos)
+        print("✓ Productos iniciales insertados")
+    
+    conn.commit()
+    conn.close()
+    print("✓ Base de datos SQL Server inicializada")
+
+def verificar_usuario(usuario, contrasena):
+    """Verifica si el usuario y contraseña son correctos"""
+    conn = get_connection()
+    if not conn: return None
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        SELECT * FROM usuarios 
+        WHERE usuario = ? AND contrasena = ? AND activo = 1
+    """, (usuario, hash_password(contrasena)))
+    
+    row = cursor.fetchone()
+    user = row_to_dict(cursor, row) if row else None
+    conn.close()
+    
+    return user
+
+def registrar_usuario(usuario, nombre_completo, celular, email, contrasena):
+    """Registra un nuevo usuario en la base de datos"""
+    conn = get_connection()
+    if not conn: return {"success": False, "error": "Error de conexión"}
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute("SELECT COUNT(*) FROM usuarios WHERE usuario = ?", (usuario,))
+        if cursor.fetchone()[0] > 0:
+            conn.close()
+            return {"success": False, "error": "El usuario ya existe"}
+        
+        cursor.execute("SELECT COUNT(*) FROM usuarios WHERE email = ?", (email,))
+        if cursor.fetchone()[0] > 0:
+            conn.close()
+            return {"success": False, "error": "El email ya está registrado"}
+        
+        cursor.execute("""
+            INSERT INTO usuarios (usuario, contrasena, nombre_completo, email, celular, activo)
+            VALUES (?, ?, ?, ?, ?, 1)
+        """, (usuario, hash_password(contrasena), nombre_completo, email, celular))
+        
+        conn.commit()
+        
+        cursor.execute("SELECT CAST(SCOPE_IDENTITY() AS INT)")
+        user_id = cursor.fetchone()[0]
+        
+        conn.close()
+        print(f"✓ Usuario '{usuario}' registrado correctamente")
+        return {"success": True, "id": user_id, "message": "Usuario registrado exitosamente"}
+    
+    except Exception as e:
+        print(f"✗ Error registrando usuario: {e}")
+        conn.rollback()
+        conn.close()
+        return {"success": False, "error": str(e)}
+
+def actualizar_usuario(usuario_id, nombre_completo=None, email=None, celular=None, contrasena=None):
+    """Actualiza los datos de un usuario"""
+    conn = get_connection()
+    if not conn: return {"success": False, "error": "Error de conexión"}
+    cursor = conn.cursor()
+    
+    try:
+        updates = []
+        params = []
+        
+        if nombre_completo:
+            updates.append("nombre_completo = ?")
+            params.append(nombre_completo)
+        if email:
+            updates.append("email = ?")
+            params.append(email)
+        if celular:
+            updates.append("celular = ?")
+            params.append(celular)
+        if contrasena:
+            updates.append("contrasena = ?")
+            params.append(hash_password(contrasena))
+        
+        if not updates:
+            conn.close()
+            return {"success": False, "error": "No hay datos para actualizar"}
+        
+        params.append(usuario_id)
+        query = f"UPDATE usuarios SET {', '.join(updates)} WHERE id = ?"
+        
+        cursor.execute(query, params)
+        conn.commit()
+        conn.close()
+        return {"success": True, "message": "Usuario actualizado exitosamente"}
+    except Exception as e:
+        print(f"✗ Error actualizando usuario: {e}")
+        conn.rollback()
+        conn.close()
+        return {"success": False, "error": str(e)}
+
+def obtener_productos():
+    """Obtiene todos los productos con stock"""
+    conn = get_connection()
+    if not conn: return []
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        SELECT id, nombre as Name, precio as Precio, stock as Stock, 
+               categoria as Categoria, imagen as Image
+        FROM productos 
+        WHERE activo = 1
+        ORDER BY nombre
+    """)
+    
+    productos = rows_to_dict_list(cursor, cursor.fetchall())
+    conn.close()
+    return productos
+
+def agregar_producto_nuevo(nombre, precio, stock, categoria, imagen):
+    """Agrega un nuevo producto a la base de datos"""
+    conn = get_connection()
+    if not conn: return {"success": False, "error": "Error de conexión"}
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute("""
+            INSERT INTO productos (nombre, precio, stock, categoria, imagen)
+            VALUES (?, ?, ?, ?, ?)
+        """, (nombre, precio, stock, categoria, imagen))
+        
+        conn.commit()
+      
+        cursor.execute("SELECT CAST(SCOPE_IDENTITY() AS INT)")
+        producto_id = cursor.fetchone()[0]
+        
+        conn.close()
+        print(f"✓ Producto '{nombre}' agregado correctamente")
+        return {"success": True, "id": producto_id, "message": "Producto agregado exitosamente"}
+    except Exception as e:
+        print(f"✗ Error agregando producto: {e}")
+        conn.rollback()
+        conn.close()
+        return {"success": False, "error": str(e)}
+
+def obtener_categorias():
+    """Obtiene todas las categorías únicas"""
+    conn = get_connection()
+    if not conn: return []
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        SELECT DISTINCT categoria 
+        FROM productos 
+        WHERE activo = 1 AND categoria IS NOT NULL
+        ORDER BY categoria
+    """)
+    
+    categorias = [row[0] for row in cursor.fetchall()]
+    conn.close()
+    return categorias
+
+def generar_numero_venta():
+    """Genera un número de venta único"""
+    return f"V-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+
+def registrar_venta(carrito, metodo_pago="Efectivo"):
+    """Registra una venta con el trigger automático de stock"""
+    conn = get_connection()
+    if not conn: return {"success": False, "error": "Error de conexión"}
+    cursor = conn.cursor()
+    
+    try:
+
+        total = sum(float(item['Precio']) * int(item['Cantidad']) for item in carrito)
+        numero_venta = generar_numero_venta()
+        
+        productos_json = json.dumps([{
+            'nombre': item['Name'],
+            'cantidad': item['Cantidad'],
+            'precio': item['Precio'],
+            'subtotal': item['Precio'] * item['Cantidad']
+        } for item in carrito])
+        
+        cursor.execute("""
+            INSERT INTO ventas (numero_venta, total, productos_json, metodo_pago)
+            VALUES (?, ?, ?, ?)
+        """, (numero_venta, total, productos_json, metodo_pago))
+        
+        cursor.execute("SELECT CAST(SCOPE_IDENTITY() AS INT)")
+        venta_id = cursor.fetchone()[0]
+        
+        for item in carrito:
+            cursor.execute("SELECT id FROM productos WHERE nombre = ?", (item['Name'],))
+            resultado = cursor.fetchone()
+            
+            if resultado:
+                producto_id = resultado[0]
+                cursor.execute("""
+                    INSERT INTO detalle_ventas (venta_id, producto_id, cantidad, precio_unitario, subtotal)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (venta_id, producto_id, item['Cantidad'], item['Precio'], item['Precio'] * item['Cantidad']))
+        
+        conn.commit()
+        conn.close()
+        
+        return {
+            "success": True,
+            "numero_venta": numero_venta,
+            "venta_id": venta_id,
+            "total": total,
+            "metodo_pago": metodo_pago
+        }
+        
+    except Exception as e:
+        print(f"Error registrando venta: {e}")
+        conn.rollback()
+        conn.close()
+        return {"success": False, "error": str(e)}
+
+def eliminar_producto(producto_id):
+    """Elimina un producto de la base de datos (desactiva)"""
+    conn = get_connection()
+    if not conn: return {"success": False, "error": "Error de conexión"}
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute("""
+            UPDATE productos 
+            SET activo = 0 
+            WHERE id = ?
+        """, (producto_id,))
+        
+        conn.commit()
+        conn.close()
+        print(f"✓ Producto eliminado")
+        return {"success": True, "message": "Producto eliminado exitosamente"}
+    except Exception as e:
+        print(f"✗ Error eliminando producto: {e}")
+        conn.rollback()
+        conn.close()
+        return {"success": False, "error": str(e)}
+
+def obtener_producto_por_id(producto_id):
+    """Obtiene un producto específico por su ID"""
+    conn = get_connection()
+    if not conn: return None
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        SELECT id, nombre, precio, stock, categoria, imagen
+        FROM productos 
+        WHERE id = ? AND activo = 1
+    """, (producto_id,))
+    
+    row = cursor.fetchone()
+    producto = row_to_dict(cursor, row) if row else None
+    conn.close()
+    return producto
+
+def actualizar_producto(producto_id, nombre=None, precio=None, stock=None, categoria=None, imagen=None):
+    """Actualiza los datos de un producto"""
+    conn = get_connection()
+    if not conn: return {"success": False, "error": "Error de conexión"}
+    cursor = conn.cursor()
+    
+    try:
+        updates = []
+        params = []
+        
+        if nombre is not None:
+            updates.append("nombre = ?")
+            params.append(nombre)
+        if precio is not None:
+            updates.append("precio = ?")
+            params.append(precio)
+        if stock is not None:
+            updates.append("stock = ?")
+            params.append(stock)
+        if categoria is not None:
+            updates.append("categoria = ?")
+            params.append(categoria)
+        if imagen is not None:
+            updates.append("imagen = ?")
+            params.append(imagen)
+        
+        if not updates:
+            conn.close()
+            return {"success": False, "error": "No hay datos para actualizar"}
+        
+        params.append(producto_id)
+        query = f"UPDATE productos SET {', '.join(updates)} WHERE id = ?"
+        
+        cursor.execute(query, params)
+        conn.commit()
+        conn.close()
+        return {"success": True, "message": "Producto actualizado exitosamente"}
+    except Exception as e:
+        print(f"✗ Error actualizando producto: {e}")
+        conn.rollback()
+        conn.close()
+        return {"success": False, "error": str(e)}
+
+def obtener_ventas_por_dia(limite=30):
+    """Obtiene las ventas agrupadas por día para gráficos"""
+    conn = get_connection()
+    if not conn: return []
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        SELECT TOP (?)
+            CAST(fecha AS DATE) as dia,
+            COUNT(*) as cantidad_ventas,
+            SUM(total) as total_vendido
+        FROM ventas
+        GROUP BY CAST(fecha AS DATE)
+        ORDER BY CAST(fecha AS DATE) DESC
+    """, (limite,))
+    
+    ventas = rows_to_dict_list(cursor, cursor.fetchall())
+    conn.close()
+    return list(reversed(ventas))
+
+def obtener_estadisticas_generales():
+    """Obtiene estadísticas generales del sistema"""
+    conn = get_connection()
+    if not conn: return {}
+    cursor = conn.cursor()
+    
+    cursor.execute("SELECT COUNT(*) as total FROM productos WHERE activo = 1")
+    total_productos = cursor.fetchone()[0]
+    
+    cursor.execute("SELECT COUNT(*) as total, COALESCE(SUM(total), 0) as suma FROM ventas")
+    row_ventas = cursor.fetchone()
+    total_ventas = row_ventas[0]
+    suma_ventas = row_ventas[1]
+    
+    cursor.execute("SELECT COUNT(*) as total FROM productos WHERE stock < 5 AND activo = 1")
+    productos_stock_bajo = cursor.fetchone()[0]
+    
+
+    cursor.execute("""
+        SELECT COUNT(*) as total, COALESCE(SUM(total), 0) as suma 
+        FROM ventas 
+        WHERE CAST(fecha AS DATE) = CAST(GETDATE() AS DATE)
+    """)
+    ventas_hoy = cursor.fetchone()
+    
+    conn.close()
+    
+    return {
+        "total_productos": total_productos,
+        "total_ventas": total_ventas,
+        "suma_ventas": suma_ventas,
+        "productos_stock_bajo": productos_stock_bajo,
+        "ventas_hoy": ventas_hoy[0],
+        "suma_ventas_hoy": ventas_hoy[1]
+    }
+
+def obtener_ventas_por_fecha():
+    """Obtiene las ventas agrupadas por fecha para reportes"""
+    conn = get_connection()
+    if not conn: return []
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        SELECT TOP 30 CAST(fecha AS DATE) as fecha, COUNT(*) as cantidad, SUM(total) as total
+        FROM ventas
+        GROUP BY CAST(fecha AS DATE)
+        ORDER BY CAST(fecha AS DATE) DESC
+    """)
+    
+    ventas = rows_to_dict_list(cursor, cursor.fetchall())
+    conn.close()
+    return ventas
+
+def obtener_ventas_detalladas():
+    """Obtiene todas las ventas con su detalle completo"""
+    conn = get_connection()
+    if not conn: return []
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        SELECT TOP 100 numero_venta, total, productos_json, metodo_pago, fecha
+        FROM ventas
+        ORDER BY fecha DESC
+    """)
+    
+    ventas = []
+    rows = cursor.fetchall()
+    columns = [column[0] for column in cursor.description]
+    
+    for row in rows:
+        venta_dict = dict(zip(columns, row))
+        if venta_dict.get('productos_json'):
+            venta_dict['productos'] = json.loads(venta_dict['productos_json'])
+        ventas.append(venta_dict)
+    
+    conn.close()
+    return ventas
+
+
+if __name__ == "__main__":
+    inicializar_db()
